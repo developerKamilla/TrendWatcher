@@ -1,0 +1,12 @@
+services:
+  trendwatcher:
+    build: .
+    ports:
+      - "127.0.0.1:8501:8501"
+    volumes:
+      - trendwatcher-data:/app/data
+    environment:
+      TRENDWATCHER_DB: /app/data/trendwatcher.sqlite3
+    restart: unless-stopped
+volumes:
+  trendwatcher-data:
