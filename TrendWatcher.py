@@ -6,15 +6,15 @@ import json
 import os
 from pathlib import Path
 import pandas as pd
-import plotly.graph_objects as go
 import streamlit as st
 from trendwatcher.catalog import SOURCES
 from trendwatcher.core import FACTOR_NAMES, WEIGHTS, import_articles, safe_url
 from trendwatcher.seed import starter_articles, apply_prepared_analysis
 from trendwatcher.services import collect_sources, run_pipeline, DEFAULT_MODEL
 from trendwatcher.storage import Store
+from trendwatcher.visuals import score_ring, factor_bars, signal_art
 from trendwatcher.presentation import (SECTORS, FACTOR_HELP, average_score, sectors_for,
-    select_news, saved_cards, radar_figure, export_news)
+    select_news, saved_cards, radar_svg, factor_distribution_html, export_news)
 
 PAGES = ["Новости", "Избранное", "Аналитика", "Источники"]
 PERIODS = ["Все даты", "Сегодня", "7 дней", "30 дней"]
@@ -146,7 +146,7 @@ def open_card(card_id, origin):
 def favorite_button(card, store, prefix):
     selected = st.session_state.annotations.get(card['id'],{}).get('favorite',False)
     if st.button("В избранном" if selected else "В избранное",icon=":material/bookmark:" if selected else ":material/bookmark_border:",
-                 key=f"fav_{prefix}_{card['id']}",width='stretch'):
+                 key=f"fav_{prefix}_{card['id']}",use_container_width=True):
         annotate(store,card['id'],favorite=not selected,card=card)
         st.rerun()
 
@@ -163,16 +163,17 @@ def signal_row(card, store, prefix):
     with st.container(border=True,key=f"card_{prefix}_{card['id']}"):
         sectors=sectors_for(card)
         note=st.session_state.annotations.get(card['id'],{}).get('note','')
-        st.markdown(f'<article class="tw-news"><div class="tw-news-top"><div class="tw-kicker">{esc(sectors[0])}</div>'
-            f'<div class="tw-rating"><span>Средняя оценка</span><strong>{average_score(card):.2f}<small> / 5</small></strong></div></div>'
+        st.markdown(f'<article class="tw-news">{signal_art(card)}<div class="tw-news-top"><div class="tw-kicker">{esc(sectors[0])}</div></div>'
             f'<h2 class="tw-news-title">{esc(card["headline"])}</h2>'
             f'<div class="tw-meta">{esc(card["source"])}<span>·</span>{esc(card.get("date") or "Без даты")}</div>'
-            f'<p class="tw-summary">{esc(card["summary"])}</p>{factors_html(card)}</article>',unsafe_allow_html=True)
+            f'<p class="tw-summary">{esc(card["summary"])}</p><div class="tw-evaluation"><div class="tw-ring-block">'
+            f'<span>FinSignal Score</span>{score_ring(card)}</div>{factor_bars(card)}</div>'
+            f'<div class="tw-average">Средняя оценка: {average_score(card):.2f} / 5</div></article>',unsafe_allow_html=True)
         if note:
             st.markdown(f'<div class="tw-note-preview"><b>Заметка</b> {esc(note[:180])}</div>',unsafe_allow_html=True)
-        a,b,space=st.columns([1.15,1.15,3])
+        a,b=st.columns(2)
         a.button("Подробнее",icon=":material/arrow_outward:",key=f"open_{prefix}_{card['id']}",
-            on_click=open_card,args=(card['id'],st.session_state.page),width='stretch')
+            on_click=open_card,args=(card['id'],st.session_state.page),use_container_width=True)
         with b:favorite_button(card,store,prefix)
 
 
@@ -180,25 +181,28 @@ def detail(card,store):
     st.button("К новостям" if st.session_state.get('detail_origin')!='Избранное' else "К избранному",
               icon=":material/arrow_back:",on_click=navigate)
     page_heading(card['headline'],f'{card["source"]} · {card.get("date") or "Без даты"}'," / ".join(sectors_for(card)))
-    left,right=st.columns([1.25,1],gap="large")
+    right,left,actions=st.columns([1,1.35,1.15],gap="large")
     with left:
-        st.subheader("О новости")
-        st.write(card['summary'])
+        with st.container(border=True,key='summary_panel'):
+            st.subheader("Short Summary")
+            st.write(card['summary'])
         body=card.get('text','')
         remainder=body[len(card['summary']):].strip() if body.startswith(card['summary']) else body
         if remainder and remainder!=card['summary']:
-            st.write(remainder)
+            with st.expander('Подробности публикации'):st.write(remainder)
         if safe_url(card.get('url')):
             st.link_button("Читать в источнике",card['url'],icon=":material/open_in_new:",type="primary")
         else:
             st.caption("Источник без ссылки")
-        st.subheader("Why Now")
-        st.caption("Почему это важно сейчас")
-        st.write(card.get('why_now') or 'Запустите ИИ-анализ в разделе «Источники», чтобы оценить актуальность новости.')
+        with st.container(border=True,key='why_panel'):
+            st.subheader("Why Now")
+            st.caption("Почему это важно сейчас")
+            st.write(card.get('why_now') or 'Запустите ИИ-анализ в разделе «Источники», чтобы оценить актуальность новости.')
+    with actions:
         st.subheader("Recommended Actions")
         st.caption("Рекомендуемые действия для команды")
         for index, action in enumerate(card.get('recommended_actions', []), 1):
-            st.markdown(f'<div class="tw-action"><span>{index:02d}</span><p>{esc(action)}</p></div>',unsafe_allow_html=True)
+            st.markdown(f'<div class="tw-action"><span>{index}</span><p>{esc(action)}</p></div>',unsafe_allow_html=True)
         if not card.get('recommended_actions'):
             st.write('Запустите ИИ-анализ в разделе «Источники», чтобы получить рекомендации.')
         for ref in card.get('related_sources',[]):
@@ -214,10 +218,13 @@ def detail(card,store):
                 st.success("Заметка сохранена")
     with right:
         with st.container(border=True,key="rating_detail"):
-            st.markdown(f'<div class="tw-detail-score"><span>Средняя оценка</span><strong>{average_score(card):.2f}<small> / 5</small></strong></div>',unsafe_allow_html=True)
-            st.plotly_chart(radar_figure(card['breakdown']),width='stretch',theme=None,config={"displayModeBar":False},key='radar_detail')
-            for key,label in FACTOR_NAMES.items():
-                st.markdown(f'<div class="tw-criterion"><span>{esc(label)}</span><b>{card["breakdown"][key]:g}<small> / 5</small></b></div>',unsafe_allow_html=True)
+            st.subheader('FinSignal Score')
+            st.markdown('<div class="tw-score-hero">'+score_ring(card)+
+                        '<p>Взвешенная значимость<br><small>для продуктовой команды</small></p></div>',unsafe_allow_html=True)
+            st.markdown('<div class="tw-panel-label">Оценка по пяти факторам</div>'+factor_bars(card),unsafe_allow_html=True)
+            st.caption(f'Средняя оценка: {average_score(card):.2f} / 5')
+        with st.expander('Радар пяти факторов'):
+            st.markdown(radar_svg(card['breakdown']),unsafe_allow_html=True)
         with st.expander("Как читать оценку"):
             st.write("Средняя оценка — сумма пяти критериев, делённая на пять. Каждый критерий: от 1 до 5.")
             for key,label in FACTOR_NAMES.items():st.write(f"**{label}.** {FACTOR_HELP[key]}")
@@ -263,13 +270,19 @@ def news_page(cards,store,favorites=False):
         detail(selected,store);return
     page_heading("Избранное" if favorites else "Финтех в фокусе.",
                  "Сохранённые новости и ваши заметки." if favorites else "Новости, которые имеют значение для банка.")
+    if not favorites:
+        high=sum(c['finsignal_score']>=4 for c in cards)
+        saved=len(saved_cards(cards,st.session_state.annotations))
+        st.markdown(f'<section class="tw-overview"><div><span class="tw-mini-mark">↗</span><b>Ваша финтех-подборка</b>'
+                    f'<p>От новостей — к решениям.</p></div><div><strong>{len(cards)}</strong><span>Публикаций</span></div>'
+                    f'<div><strong>{high}</strong><span>FinSignal ≥ 4</span></div><div><strong>{saved}</strong><span>В избранном</span></div></section>',unsafe_allow_html=True)
     if favorites and not cards:
         empty("Здесь будет важное","Сохраняйте новости кнопкой «В избранное».");return
     subset=filters(cards,'favorites' if favorites else 'news')
     a,b=st.columns([3,1])
     a.markdown(f'<div class="tw-result-count">{len(subset)} публикаций <span> / {len(cards)} в подборке</span></div>',unsafe_allow_html=True)
     if favorites and subset:
-        with b,st.popover("Скачать подборку",width='stretch'):
+        with b,st.popover("Скачать подборку",use_container_width=True):
             st.download_button("Markdown",export_news(subset,st.session_state.annotations),"TrendWatcher_Favorites.md","text/markdown")
             payload={'cards':subset,'annotations':{c['id']:{k:v for k,v in st.session_state.annotations.get(c['id'],{}).items() if k!='card'} for c in subset}}
             st.download_button("JSON",json.dumps(payload,ensure_ascii=False,indent=2),"TrendWatcher_Favorites.json","application/json")
@@ -277,7 +290,11 @@ def news_page(cards,store,favorites=False):
         empty("Новостей не найдено","Попробуйте другую сферу или расширьте период.");return
     pages=max(1,(len(subset)+7)//8)
     page=st.selectbox("Страница",range(1,pages+1),key='pagination_'+str(favorites)) if pages>1 else 1
-    for card in subset[(page-1)*8:page*8]:signal_row(card,store,'favorites' if favorites else 'news')
+    visible=subset[(page-1)*8:page*8]
+    for i in range(0,len(visible),2):
+        columns=st.columns(2,gap='large')
+        for col,card in zip(columns,visible[i:i+2]):
+            with col:signal_row(card,store,'favorites' if favorites else 'news')
 
 
 def analytics(cards):
@@ -292,21 +309,10 @@ def analytics(cards):
     with left:
         st.subheader("Средний профиль")
         means={key:sum(c['breakdown'][key] for c in subset)/len(subset) for key in FACTOR_NAMES}
-        st.plotly_chart(radar_figure(means),width='stretch',theme=None,config={"displayModeBar":False})
+        st.markdown(radar_svg(means),unsafe_allow_html=True)
     with right:
         st.subheader("Распределение пяти факторов")
-        fig=go.Figure()
-        colors=['#ef443c','#b92020','#f4786d','#d7c8ca','#8d7a80']
-        for (key,label),color in zip(FACTOR_NAMES.items(),colors):
-            fig.add_trace(go.Histogram(x=[c['breakdown'][key] for c in subset],name=label,
-                xbins=dict(start=.5,end=5.5,size=1),marker_color=color,
-                hovertemplate=label+'<br>Балл: %{x}<br>Новостей: %{y}<extra></extra>'))
-        fig.update_layout(height=400,barmode='group',bargap=.24,margin=dict(l=15,r=15,t=15,b=15),
-            paper_bgcolor='rgba(0,0,0,0)',plot_bgcolor='rgba(0,0,0,0)',font=dict(color='#ddd7d8'),
-            legend=dict(orientation='h',y=-.2,font=dict(size=11)),
-            xaxis=dict(title='Оценка',tickvals=[1,2,3,4,5],range=[.5,5.5],fixedrange=True),
-            yaxis=dict(title='Новости',dtick=1,gridcolor='#332c2e',fixedrange=True))
-        st.plotly_chart(fig,width='stretch',theme=None,config={"displayModeBar":False})
+        st.markdown(factor_distribution_html(subset),unsafe_allow_html=True)
         st.caption("Дробные оценки сгруппированы по ближайшему целому баллу.")
 
 
@@ -384,12 +390,12 @@ def sources(store):
         with st.expander("Результаты загрузки"):
             for warning in st.session_state.results.get('warnings',[]):st.warning(warning)
             if st.session_state.source_logs:
-                st.dataframe(pd.DataFrame(st.session_state.source_logs).rename(columns={'source':'Источник','status':'Результат','count':'Публикации','method':'Метод'}),hide_index=True,width='stretch')
+                st.dataframe(pd.DataFrame(st.session_state.source_logs).rename(columns={'source':'Источник','status':'Результат','count':'Публикации','method':'Метод'}),hide_index=True,use_container_width=True)
 
 
 def account(store):
     user=st.session_state.user
-    with st.popover(user['username'] if user else 'Войти',icon=":material/person_outline:",width='stretch'):
+    with st.popover(user['username'] if user else 'Войти',icon=":material/person_outline:",use_container_width=True):
         if user:
             st.caption("Избранное и заметки сохраняются в аккаунте")
             st.button("Выйти",on_click=reset_workspace)
@@ -428,7 +434,7 @@ def main():
         if key in st.session_state:st.session_state[key]=st.session_state[key]
     with st.container(key='header'):
         logo,nav,profile=st.columns([1.7,3.6,1],vertical_alignment='center')
-        with logo:st.markdown('<div class="tw-brand">TrendWatcher<span>.</span></div>',unsafe_allow_html=True)
+        with logo:st.markdown('<div class="tw-brand"><span class="tw-logo-mark">↗</span>TrendWatcher</div>',unsafe_allow_html=True)
         with nav:st.radio('Навигация',PAGES,key='page',horizontal=True,label_visibility='collapsed',on_change=navigate)
         with profile:account(store)
     cards=st.session_state.results['cards']

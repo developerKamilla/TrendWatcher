@@ -26,7 +26,7 @@ def test_news_favorite_note_and_filters(monkeypatch,tmp_path):
     nav(at,'Избранное')
     assert len([b for b in at.button if b.label=='Подробнее'])==1
     button(at,'Подробнее').click().run()
-    assert len(at.get('plotly_chart'))==1 and not at.exception
+    assert any('tw-radar' in m.value for m in at.markdown) and not at.exception
     at.text_area[0].set_value('Обсудить влияние на платёжный продукт')
     button(at,'Сохранить заметку').click().run()
     assert at.success and not at.exception
@@ -42,7 +42,8 @@ def test_news_favorite_note_and_filters(monkeypatch,tmp_path):
     button(at,'Сбросить фильтры').click().run()
     assert len([b for b in at.button if b.label=='Подробнее'])==6
     nav(at,'Аналитика')
-    assert len(at.get('plotly_chart'))==2
+    assert any('tw-radar' in m.value for m in at.markdown)
+    assert any('tw-histogram' in m.value for m in at.markdown)
     nav(at,'Источники')
     assert any(b.label=='Обновить новости' for b in at.button)
     next(t for t in at.text_area if t.label=='Темы и задачи команды').set_value('Платежи для бизнеса').run()
